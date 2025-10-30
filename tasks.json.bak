@@ -1,26 +1,26 @@
 [
     {
         "id": 1,
-        "name": "test",
-        "path": "D:/Software Development/Schedulerv2/dist/test_console_app.exe",
+        "name": "counter",
+        "path": "D:/Software Development/SchedulerV2/dist/test_counter.exe",
         "interval": 1,
         "status": "Idle",
-        "last_run": "2025-10-30 19:04:27"
+        "last_run": "2025-10-31 01:42:01"
     },
     {
         "id": 2,
-        "name": "counter",
-        "path": "D:/Software Development/Schedulerv2/dist/test_counter.exe",
+        "name": "gui",
+        "path": "D:/Software Development/SchedulerV2/dist/test_gui_app.exe",
         "interval": 1,
         "status": "Idle",
-        "last_run": null
+        "last_run": "2025-10-31 01:41:59"
     },
     {
         "id": 3,
-        "name": "gui",
-        "path": "D:/Software Development/Schedulerv2/dist/test_quick_task.exe",
+        "name": "stress",
+        "path": "D:/Software Development/SchedulerV2/dist/test_stress_app.exe",
         "interval": 1,
         "status": "Idle",
-        "last_run": "2025-10-30 19:09:12"
+        "last_run": "2025-10-31 01:42:02"
     }
 ]

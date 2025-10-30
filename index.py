@@ -263,7 +263,7 @@ class ProcessExecutor:
                     exe_path,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    stdin=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                     text=True,
                     bufsize=1,
@@ -359,7 +359,9 @@ class ProcessExecutor:
     def _monitor_completion_simple(self, process, exe_path, completion_callback=None):
         """Monitor process completion without logging (lightweight)"""
         try:
+            print(f"[MONITOR] Starting completion monitor for {os.path.basename(exe_path)}")
             process.wait()
+            print(f"[MONITOR] Process {os.path.basename(exe_path)} completed with code {process.returncode}")
             if exe_path in self.running_processes:
                 del self.running_processes[exe_path]
         except Exception as e:
@@ -367,6 +369,7 @@ class ProcessExecutor:
         finally:
             if completion_callback:
                 try:
+                    print(f"[MONITOR] Calling completion callback for {os.path.basename(exe_path)}")
                     completion_callback()
                 except Exception as e:
                     print(f"Error in completion callback: {e}")
@@ -459,6 +462,7 @@ class LogTab(ctk.CTkScrollableFrame):
         self.on_close_callback = on_close_callback
         self.executor = executor  # ProcessExecutor reference
         self.exe_path = exe_path  # Executable path for cleanup
+        self.auto_closing = False  # Flag to indicate if auto-closing without user action
         
         # Header frame with close button
         header = ctk.CTkFrame(self, fg_color="#1a1a1a")
@@ -527,8 +531,9 @@ class LogTab(ctk.CTkScrollableFrame):
             self.after(0, _append)
     
     def close_process(self):
-        """Gracefully terminate the running process"""
-        if self.process:
+        """Gracefully terminate the running process (only if explicitly requested)"""
+        # Only terminate if process exists and we're not auto-closing
+        if self.process and not self.auto_closing:
             try:
                 # Try graceful termination first
                 self.append_log(f"\n[!] Terminating process gracefully...\n")
@@ -1128,8 +1133,11 @@ class SchedulerApp(ctk.CTk):
         exe_path = task["path"]
         task_id = task["id"]
         
+        print(f"[RUN_TASK] Executing task {task_id}: {os.path.basename(exe_path)}")
+        
         # Check if this is a console app that needs logging
         needs_logging = self.executor.is_console_app(exe_path)
+        print(f"[RUN_TASK] Detected as {'CONSOLE' if needs_logging else 'GUI'} app")
         
         log_tab = None
         log_callback = None
@@ -1164,6 +1172,7 @@ class SchedulerApp(ctk.CTk):
         # Create completion callback to auto-close tab
         def on_completion():
             # Update status back to Idle
+            print(f"[COMPLETION] Setting task {task_id} to Idle")
             self.update_task_status(task_id, "Idle")
             self.task_manager.update_status(
                 task_id,
@@ -1192,11 +1201,11 @@ class SchedulerApp(ctk.CTk):
             
             # If process was skipped (already running), handle it
             if result == "skipped":
-                # Set status back to Idle immediately
-                self.update_task_status(task_id, "Idle")
-                # Auto-close tab after 2 seconds if it has logging
+                # DO NOT change status - keep it as Running since process is still running
+                # DO NOT close the log tab - let the original process continue logging
+                # Just append a skip message to inform user
                 if needs_logging and task_id in self.log_tabs:
-                    self.after(2000, lambda: self.auto_close_panel(task_id))
+                    self.log_tabs[task_id].append_log(f"\n[!] Second execution attempt blocked - process already running\n\n")
         
         threading.Thread(target=execute_thread, daemon=True).start()
     
@@ -1225,6 +1234,8 @@ class SchedulerApp(ctk.CTk):
             task = next((t for t in self.task_manager.tasks if t["id"] == task_id), None)
             if task:
                 try:
+                    # Set flag to indicate auto-closing (won't terminate process)
+                    self.log_tabs[task_id].auto_closing = True
                     self.log_container.delete(task["name"])
                     del self.log_tabs[task_id]
                 except Exception as e:
