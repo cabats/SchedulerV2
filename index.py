@@ -19,6 +19,14 @@ from apscheduler.triggers.interval import IntervalTrigger
 import psutil
 import time
 
+# Debug mode - set to False for production
+DEBUG = False
+
+def debug_print(msg):
+    """Conditional debug logging"""
+    if DEBUG:
+        print(msg)
+
 # Set appearance
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -40,9 +48,9 @@ class TaskManager:
         self.filename = os.path.join(app_dir, filename)
         self.config_filename = os.path.join(app_dir, config_filename)
         
-        print(f"[DEBUG] App directory: {app_dir}")
-        print(f"[DEBUG] Tasks file: {self.filename}")
-        print(f"[DEBUG] Config file: {self.config_filename}")
+        debug_print(f"[DEBUG] App directory: {app_dir}")
+        debug_print(f"[DEBUG] Tasks file: {self.filename}")
+        debug_print(f"[DEBUG] Config file: {self.config_filename}")
         
         self.tasks = self.load_tasks()
         self.config = self.load_config()
@@ -54,7 +62,7 @@ class TaskManager:
                 with open(self.filename, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except (json.JSONDecodeError, IOError) as e:
-                print(f"Error loading tasks: {e}")
+                debug_print(f"Error loading tasks: {e}")
                 # Backup corrupted file
                 if os.path.exists(self.filename):
                     backup_name = f"{self.filename}.backup"
@@ -72,7 +80,7 @@ class TaskManager:
                 with open(self.config_filename, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except (json.JSONDecodeError, IOError) as e:
-                print(f"Error loading config: {e}")
+                debug_print(f"Error loading config: {e}")
                 return {"last_exe_path": None}
         return {"last_exe_path": None}
     
@@ -82,7 +90,7 @@ class TaskManager:
             with open(self.config_filename, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=4)
         except IOError as e:
-            print(f"Error saving config: {e}")
+            debug_print(f"Error saving config: {e}")
     
     def set_last_exe_path(self, path):
         """Save the last selected exe path"""
@@ -113,7 +121,7 @@ class TaskManager:
             
             os.rename(temp_filename, self.filename)
         except IOError as e:
-            print(f"Error saving tasks: {e}")
+            debug_print(f"Error saving tasks: {e}")
             # Cleanup temp file if it exists
             if os.path.exists(temp_filename):
                 try:
@@ -135,11 +143,21 @@ class TaskManager:
             "path": path,
             "interval": interval,
             "status": "Idle",
-            "last_run": None
+            "last_run": None,
+            "enabled": True  # Tasks enabled by default
         }
         self.tasks.append(task)
         self.save_tasks()
         return task
+    
+    def toggle_enabled(self, task_id, enabled):
+        """Enable or disable a task"""
+        for task in self.tasks:
+            if task["id"] == task_id:
+                task["enabled"] = enabled
+                self.save_tasks()
+                return True
+        return False
     
     def update_task(self, task_id, name, path, interval):
         """Update existing task"""
@@ -173,6 +191,7 @@ class ProcessExecutor:
     
     def __init__(self):
         self.running_processes = {}  # {exe_path: process_object}
+        self.heartbeat_threads = {}  # Track heartbeat threads per task
     
     def is_running(self, exe_path):
         """Check if a process is already running"""
@@ -189,7 +208,7 @@ class ProcessExecutor:
     def is_console_app(self, exe_path):
         """Detect if exe is a console application (needs log capture)"""
         if not os.path.exists(exe_path):
-            print(f"Executable not found: {exe_path}")
+            debug_print(f"Executable not found: {exe_path}")
             return False
             
         try:
@@ -226,7 +245,7 @@ class ProcessExecutor:
                     # CUI (Console) = 3, GUI = 2
                     return subsystem == 3
         except (IOError, OSError, struct.error) as e:
-            print(f"Error reading PE header from {exe_path}: {e}")
+            debug_print(f"Error reading PE header from {exe_path}: {e}")
         
         return False  # Default to GUI (no log capture)
     
@@ -321,7 +340,7 @@ class ProcessExecutor:
         except (FileNotFoundError, OSError, PermissionError) as e:
             if log_callback:
                 log_callback(f"[x] Error executing process: {str(e)}\n")
-            print(f"Error executing {exe_path}: {e}")
+            debug_print(f"Error executing {exe_path}: {e}")
             return None
     
     def _stream_output(self, pipe, log_callback, stream_name="stream"):
@@ -332,7 +351,7 @@ class ProcessExecutor:
                     log_callback(line)
         except (IOError, OSError) as e:
             # Pipe closed or broken - process likely terminated
-            print(f"Stream error in {stream_name}: {e}")
+            debug_print(f"Stream error in {stream_name}: {e}")
         finally:
             # Ensure pipe is closed
             try:
@@ -348,49 +367,81 @@ class ProcessExecutor:
                 del self.running_processes[exe_path]
             log_callback(f"\n[+] Process completed (Exit code: {process.returncode})\n")
         except Exception as e:
-            print(f"Error monitoring completion for {exe_path}: {e}")
+            debug_print(f"Error monitoring completion for {exe_path}: {e}")
         finally:
             if completion_callback:
                 try:
                     completion_callback()
                 except Exception as e:
-                    print(f"Error in completion callback: {e}")
+                    debug_print(f"Error in completion callback: {e}")
     
     def _monitor_completion_simple(self, process, exe_path, completion_callback=None):
         """Monitor process completion without logging (lightweight)"""
         try:
-            print(f"[MONITOR] Starting completion monitor for {os.path.basename(exe_path)}")
+            debug_print(f"[MONITOR] Starting completion monitor for {os.path.basename(exe_path)}")
             process.wait()
-            print(f"[MONITOR] Process {os.path.basename(exe_path)} completed with code {process.returncode}")
+            debug_print(f"[MONITOR] Process {os.path.basename(exe_path)} completed with code {process.returncode}")
             if exe_path in self.running_processes:
                 del self.running_processes[exe_path]
         except Exception as e:
-            print(f"Error monitoring completion for {exe_path}: {e}")
+            debug_print(f"Error monitoring completion for {exe_path}: {e}")
         finally:
             if completion_callback:
                 try:
-                    print(f"[MONITOR] Calling completion callback for {os.path.basename(exe_path)}")
+                    debug_print(f"[MONITOR] Calling completion callback for {os.path.basename(exe_path)}")
                     completion_callback()
                 except Exception as e:
-                    print(f"Error in completion callback: {e}")
+                    debug_print(f"Error in completion callback: {e}")
     
     def force_cleanup(self, exe_path):
-        """Force cleanup of a process from tracking (e.g., when manually terminated)"""
+        """Force cleanup of a process from tracking - kills entire process tree"""
         exe_path = os.path.normpath(exe_path)
         if exe_path in self.running_processes:
             proc = self.running_processes[exe_path]
-            # Ensure process is actually dead
+            
+            # Ensure process is actually dead - kill entire tree
             if proc.poll() is None:
                 try:
-                    proc.terminate()
-                    # Wait briefly for graceful shutdown
+                    # Use psutil to kill entire process tree
+                    parent = psutil.Process(proc.pid)
+                    children = parent.children(recursive=True)
+                    
+                    # Terminate children first
+                    for child in children:
+                        try:
+                            child.terminate()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                    
+                    # Terminate parent
+                    parent.terminate()
+                    
+                    # Wait for graceful shutdown
+                    gone, alive = psutil.wait_procs([parent] + children, timeout=2)
+                    
+                    # Force kill any processes still alive
+                    for p in alive:
+                        try:
+                            p.kill()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                except psutil.NoSuchProcess:
+                    pass
+                except Exception as e:
+                    debug_print(f"Error terminating process tree: {e}")
+                    # Fallback to basic terminate
                     try:
-                        proc.wait(timeout=1)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                except (OSError, PermissionError) as e:
-                    print(f"Error terminating process: {e}")
-            del self.running_processes[exe_path]
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=1)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                    except:
+                        pass
+            
+            # Remove from tracking
+            if exe_path in self.running_processes:
+                del self.running_processes[exe_path]
 
 
 class VerticalLogContainer:
@@ -522,7 +573,7 @@ class LogTab(ctk.CTkScrollableFrame):
                 self.log_text.see("end")
                 self.log_text.configure(state="disabled")
             except Exception as e:
-                print(f"Error appending log: {e}")
+                debug_print(f"Error appending log: {e}")
         
         # Ensure UI update happens on main thread
         if threading.current_thread() is threading.main_thread():
@@ -556,14 +607,14 @@ class LogTab(ctk.CTkScrollableFrame):
             except (OSError, PermissionError) as e:
                 self.append_log(f"\n[x] Error terminating process: {str(e)}\n")
             except Exception as e:
-                print(f"Unexpected error terminating process: {e}")
+                debug_print(f"Unexpected error terminating process: {e}")
         
         # Call the callback to close the tab
         if self.on_close_callback:
             try:
                 self.on_close_callback()
             except Exception as e:
-                print(f"Error in close callback: {e}")
+                debug_print(f"Error in close callback: {e}")
 
 
 class AddTaskDialog(ctk.CTkToplevel):
@@ -732,6 +783,7 @@ class SchedulerApp(ctk.CTk):
         # UI components
         self.task_rows = {}
         self.log_tabs = {}
+        self.heartbeat_threads = {}  # Track heartbeat threads per task
         self.selected_task_id = None
         self.scheduler_paused = False
         self.control_button = None
@@ -785,12 +837,21 @@ class SchedulerApp(ctk.CTk):
         table_header = ctk.CTkFrame(table_container, fg_color="#1a1a1a", height=40, corner_radius=8)
         table_header.pack(fill="x", pady=(0, 5))
         
+        # Checkbox column header (empty but provides alignment)
+        ctk.CTkLabel(
+            table_header,
+            text="✓",  # Checkmark symbol
+            font=("Segoe UI", 11, "bold"),
+            width=30,
+            text_color="#00A6FF"
+        ).pack(side="left", padx=(15, 5))
+        
         ctk.CTkLabel(
             table_header,
             text="Task Name",
             font=("Segoe UI", 11, "bold"),
             width=150
-        ).pack(side="left", padx=(15, 0))
+        ).pack(side="left", padx=(5, 0))
         
         ctk.CTkLabel(
             table_header,
@@ -914,14 +975,34 @@ class SchedulerApp(ctk.CTk):
         # Make row clickable
         row.bind("<Button-1>", lambda e, t=task: self.select_task(t["id"]))
         
+        # Minimalistic checkbox - small and clean
+        enabled = task.get("enabled", True)
+        checkbox_var = ctk.BooleanVar(value=enabled)
+        checkbox = ctk.CTkCheckBox(
+            row,
+            text="",  # No text, just the checkbox
+            variable=checkbox_var,
+            width=20,
+            height=20,
+            checkbox_width=18,
+            checkbox_height=18,
+            corner_radius=3,
+            border_width=1,
+            fg_color="#00A6FF",
+            hover_color="#0090DD",
+            command=lambda: self.toggle_task_enabled(task["id"], checkbox_var.get())
+        )
+        checkbox.pack(side="left", padx=(15, 5))
+        
         name_label = ctk.CTkLabel(
             row,
             text=task["name"],
             font=("Segoe UI", 11),
             width=150,
-            anchor="w"
+            anchor="w",
+            text_color="#ffffff" if enabled else "#666666"  # Gray out disabled tasks
         )
-        name_label.pack(side="left", padx=(15, 0))
+        name_label.pack(side="left", padx=(5, 0))
         name_label.bind("<Button-1>", lambda e, t=task: self.select_task(t["id"]))
         
         # Format interval as time
@@ -933,7 +1014,8 @@ class SchedulerApp(ctk.CTk):
             text=time_str,
             font=("Segoe UI", 11),
             width=80,
-            anchor="w"
+            anchor="w",
+            text_color="#ffffff" if enabled else "#666666"
         )
         time_label.pack(side="left", padx=(10, 0))
         time_label.bind("<Button-1>", lambda e, t=task: self.select_task(t["id"]))
@@ -944,14 +1026,18 @@ class SchedulerApp(ctk.CTk):
             font=("Segoe UI", 11),
             width=80,
             anchor="w",
-            text_color="#4ade80" if task["status"] == "Running" else "#94a3b8"
+            text_color="#4ade80" if task["status"] == "Running" else ("#94a3b8" if enabled else "#555555")
         )
         status_label.pack(side="left", padx=(10, 0))
         status_label.bind("<Button-1>", lambda e, t=task: self.select_task(t["id"]))
         
         self.task_rows[task["id"]] = {
             "frame": row,
-            "status_label": status_label
+            "status_label": status_label,
+            "checkbox": checkbox,
+            "checkbox_var": checkbox_var,
+            "name_label": name_label,
+            "time_label": time_label
         }
         
         # Update scrollbar visibility
@@ -976,7 +1062,7 @@ class SchedulerApp(ctk.CTk):
             # Ignore errors if canvas/scrollbar not ready
             pass
         except Exception as e:
-            print(f"Unexpected error updating scrollbar: {e}")
+            debug_print(f"Unexpected error updating scrollbar: {e}")
     
     def select_task(self, task_id):
         """Select a task"""
@@ -1092,7 +1178,38 @@ class SchedulerApp(ctk.CTk):
         """Load and schedule all tasks"""
         for task in self.task_manager.tasks:
             self.add_task_row(task)
-            self.schedule_task(task)
+            # Only schedule enabled tasks
+            if task.get("enabled", True):
+                self.schedule_task(task)
+    
+    def toggle_task_enabled(self, task_id, enabled):
+        """Toggle task enabled/disabled state"""
+        # Update task manager
+        self.task_manager.toggle_enabled(task_id, enabled)
+        
+        # Update UI - gray out disabled tasks
+        if task_id in self.task_rows:
+            row_data = self.task_rows[task_id]
+            text_color = "#ffffff" if enabled else "#666666"
+            status_color = "#4ade80" if enabled and row_data["status_label"].cget("text") == "Running" else ("#94a3b8" if enabled else "#555555")
+            
+            row_data["name_label"].configure(text_color=text_color)
+            row_data["time_label"].configure(text_color=text_color)
+            row_data["status_label"].configure(text_color=status_color)
+        
+        # Schedule or unschedule the task
+        task = next((t for t in self.task_manager.tasks if t["id"] == task_id), None)
+        if task:
+            job_id = f"task_{task_id}"
+            if enabled:
+                # Schedule the task
+                self.schedule_task(task)
+            else:
+                # Unschedule the task
+                try:
+                    self.scheduler.remove_job(job_id)
+                except:
+                    pass  # Job might not exist
     
     def create_log_panel(self, task_name, task_id, exe_path=None):
         """Create a vertical log panel"""
@@ -1133,11 +1250,11 @@ class SchedulerApp(ctk.CTk):
         exe_path = task["path"]
         task_id = task["id"]
         
-        print(f"[RUN_TASK] Executing task {task_id}: {os.path.basename(exe_path)}")
+        debug_print(f"[RUN_TASK] Executing task {task_id}: {os.path.basename(exe_path)}")
         
         # Check if this is a console app that needs logging
         needs_logging = self.executor.is_console_app(exe_path)
-        print(f"[RUN_TASK] Detected as {'CONSOLE' if needs_logging else 'GUI'} app")
+        debug_print(f"[RUN_TASK] Detected as {'CONSOLE' if needs_logging else 'GUI'} app")
         
         log_tab = None
         log_callback = None
@@ -1166,13 +1283,38 @@ class SchedulerApp(ctk.CTk):
             
             log_callback = log_callback_fn
         
+        # If the same executable is already running, skip starting another instance
+        # and avoid flipping the status back-and-forth.
+        if self.executor.is_running(exe_path):
+            debug_print(f"[RUN_TASK] Detected existing running process for {exe_path} - skipping new start")
+            # Ensure UI shows Running
+            self.update_task_status(task_id, "Running")
+            # Inform user in log if available
+            if needs_logging and task_id in self.log_tabs:
+                try:
+                    self.log_tabs[task_id].append_log(f"\n[!] Scheduled run skipped - process already running\n\n")
+                except:
+                    pass
+            return
+
         # Update status IMMEDIATELY before execution
         self.update_task_status(task_id, "Running")
         
         # Create completion callback to auto-close tab
         def on_completion():
+            # Only set Idle if there is no other running process for the same exe_path.
+            # This avoids flipping the status to Idle when a new instance started
+            # between the moment this callback was queued and the actual completion.
+            try:
+                if self.executor.is_running(exe_path):
+                    debug_print(f"[COMPLETION] Process for {exe_path} still running - not setting Idle for task {task_id}")
+                    return
+            except Exception:
+                # If the check fails for any reason, proceed conservatively and set Idle
+                debug_print(f"[COMPLETION] Error checking running state for {exe_path}; proceeding to set Idle")
+
             # Update status back to Idle
-            print(f"[COMPLETION] Setting task {task_id} to Idle")
+            debug_print(f"[COMPLETION] Setting task {task_id} to Idle")
             self.update_task_status(task_id, "Idle")
             self.task_manager.update_status(
                 task_id,
@@ -1189,13 +1331,80 @@ class SchedulerApp(ctk.CTk):
             if task_id in self.log_tabs:
                 self.log_tabs[task_id].process = process
         
+        # Heartbeat for tif2pdf specifically
+        is_tif2pdf = 'tif2pdf' in exe_path.lower()
+        heartbeat_state = {'active': False}
+        heartbeat_count = [0]
+        
+        # Prevent overlapping heartbeat threads for this task
+        if needs_logging and is_tif2pdf:
+            existing_thread = self.heartbeat_threads.get(task_id)
+            if existing_thread and existing_thread.is_alive():
+                # Already running, do not start another heartbeat or process
+                if needs_logging and task_id in self.log_tabs:
+                    self.log_tabs[task_id].append_log(f"\n[!] Second execution attempt blocked - process already running\n\n")
+                return
+            heartbeat_state['active'] = True
+            def heartbeat():
+                """Show periodic heartbeat - simple counter"""
+                heartbeat_started = False
+                while heartbeat_state['active'] and task_id in self.log_tabs:
+                    time.sleep(1)
+                    if not heartbeat_state['active'] or task_id not in self.log_tabs:
+                        break
+                    heartbeat_count[0] += 1
+                    try:
+                        log_tab = self.log_tabs[task_id]
+                        text_widget = log_tab.log_text
+                        text_widget.configure(state="normal")
+                        if not heartbeat_started:
+                            text_widget.insert("end", f"[⏳ {heartbeat_count[0]}s]")
+                            heartbeat_started = True
+                        else:
+                            content = text_widget.get("1.0", "end")
+                            lines = content.split('\n')
+                            for i in range(len(lines) - 1, -1, -1):
+                                if lines[i].strip().startswith("[⏳"):
+                                    line_num = i + 1
+                                    text_widget.delete(f"{line_num}.0", f"{line_num}.end")
+                                    text_widget.insert(f"{line_num}.0", f"[⏳ {heartbeat_count[0]}s]")
+                                    break
+                        text_widget.configure(state="disabled")
+                        text_widget.see("end")
+                    except Exception:
+                        pass
+            t = threading.Thread(target=heartbeat, daemon=True)
+            self.heartbeat_threads[task_id] = t
+            t.start()
+        
+        # Wrap completion callback to stop heartbeat and clean up thread reference
+        original_completion = on_completion
+        def on_completion_with_heartbeat_stop():
+            # Only stop the heartbeat if there is no other running process for this exe.
+            if is_tif2pdf:
+                try:
+                    if not self.executor.is_running(exe_path):
+                        heartbeat_state['active'] = False
+                        # Clean up thread reference if present
+                        if task_id in self.heartbeat_threads:
+                            del self.heartbeat_threads[task_id]
+                    else:
+                        debug_print(f"[HEARTBEAT] Another process for {exe_path} is running - keeping heartbeat alive for task {task_id}")
+                except Exception:
+                    # If check fails, stop heartbeat to avoid orphan threads
+                    heartbeat_state['active'] = False
+                    if task_id in self.heartbeat_threads:
+                        del self.heartbeat_threads[task_id]
+
+            original_completion()
+        
         # Execute in thread
         def execute_thread():
             result = self.executor.execute(
                 exe_path, 
                 log_callback, 
                 needs_logging, 
-                completion_callback=on_completion,
+                completion_callback=on_completion_with_heartbeat_stop,
                 process_ref_callback=on_process_created
             )
             
@@ -1220,7 +1429,7 @@ class SchedulerApp(ctk.CTk):
                         text_color="#4ade80" if status == "Running" else "#94a3b8"
                     )
             except Exception as e:
-                print(f"Error updating status for task {task_id}: {e}")
+                debug_print(f"Error updating status for task {task_id}: {e}")
         
         # Ensure update happens on main thread
         if threading.current_thread() is threading.main_thread():
@@ -1239,7 +1448,7 @@ class SchedulerApp(ctk.CTk):
                     self.log_container.delete(task["name"])
                     del self.log_tabs[task_id]
                 except Exception as e:
-                    print(f"Error closing panel for task {task_id}: {e}")
+                    debug_print(f"Error closing panel for task {task_id}: {e}")
     
     def toggle_scheduler(self):
         """Toggle scheduler pause/resume"""
@@ -1273,16 +1482,16 @@ class SchedulerApp(ctk.CTk):
         try:
             # Save all current tasks to tasks.json
             self.task_manager.save_tasks()
-            print("✓ Tasks saved to disk")
+            debug_print("✓ Tasks saved to disk")
         except Exception as e:
-            print(f"Warning: Error saving tasks on close: {e}")
+            debug_print(f"Warning: Error saving tasks on close: {e}")
         
         try:
             # Shutdown scheduler gracefully
             self.scheduler.shutdown(wait=True)
-            print("✓ Scheduler shut down")
+            debug_print("✓ Scheduler shut down")
         except Exception as e:
-            print(f"Warning: Error shutting down scheduler: {e}")
+            debug_print(f"Warning: Error shutting down scheduler: {e}")
         
         # Close application
         self.destroy()

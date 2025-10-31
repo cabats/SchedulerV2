@@ -1,0 +1,10 @@
+[
+    {
+        "id": 1,
+        "name": "tif2pdf",
+        "path": "D:/Software Development/TESTISBN/tif2pdf/tif2pdf.exe",
+        "interval": 5,
+        "status": "Idle",
+        "last_run": "2025-10-31 16:55:47"
+    }
+]
